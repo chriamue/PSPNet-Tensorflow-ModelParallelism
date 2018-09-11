@@ -8,7 +8,7 @@ from .model import PSPNet101, PSPNet50
 from protoseg.backends import AbstractBackend
 from protoseg.trainer import Trainer
 
-from mxboard import SummaryWriter
+from tensorflow.summary import FileWriter
 
 
 class pspnet_backend(AbstractBackend):
@@ -16,20 +16,22 @@ class pspnet_backend(AbstractBackend):
     saver = None
     sess = None
     step = 0
+    x = None
+    y = None
 
     def __init__(self):
         AbstractBackend.__init__(self)
         self.sess = tf.Session()
 
     def load_model(self, config, modelfile):
-        img = np.zeros([config['width'], config['height'], 3], dtype=np.float32)
-        img = tf.convert_to_tensor(tf.train.batch([img],
-                                                  1))
+        self.x = tf.placeholder(tf.float32, shape=(None, config['width'], config['height'], 3), name='input_x')
+        self.y =  tf.placeholder(tf.int32, shape=(None, config['width'], config['height']), name='output_y')
+
         if config['backbone'] == 'pspnet101':
-            model = PSPNet101({'data': img}, is_training=True,
+            model = PSPNet101({'data': self.x}, is_training=True,
                               num_classes=config['classes'])
         else:
-            model = PSPNet50({'data': img}, is_training=True,
+            model = PSPNet50({'data': self.x}, is_training=True,
                              num_classes=config['classes'])
         if os.path.isfile(modelfile):
             print('loaded model from:', modelfile)
@@ -44,9 +46,6 @@ class pspnet_backend(AbstractBackend):
         net = trainer.model.model
         config = trainer.config
         raw_output = net.layers['conv6']
-
-        with tf.name_scope("create_inputs"):
-            image_batch, label_batch = self.dequeue(config['batch_size'], trainer.dataloader)
 
         # According from the prototxt in Caffe implement, learning rate must multiply by 10.0 in pyramid module
         fc_list = ['conv5_3_pool1_conv', 'conv5_3_pool2_conv',
@@ -69,7 +68,7 @@ class pspnet_backend(AbstractBackend):
 
         # Predictions: ignoring all predictions with labels greater or equal than n_classes
         raw_prediction = tf.reshape(raw_output, [-1, config['classes']])
-        label_proc = label_batch
+        label_proc = self.y
         raw_gt = tf.reshape(label_proc, [-1, ])
         indices = tf.squeeze(
             tf.where(tf.less_equal(raw_gt, config['classes'] - 1)), 1)
@@ -121,15 +120,10 @@ class pspnet_backend(AbstractBackend):
             trainer.train_op = tf.group(
                 train_op_conv, train_op_fc_w, train_op_fc_b)
 
-    def dequeue(self, num_elements, dataloader):
-        img, label = dataloader.next()
-        image_batch, label_batch = tf.train.batch([img, label],
-                                                  num_elements)
-        return image_batch, label_batch
-
     def dataloader_format(self, img, mask=None):
         if img.ndim == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        img = img.astype(np.float32)
         #img = np.rollaxis(img, axis=2, start=0)
         if mask is None:
             return tf.convert_to_tensor(img)
@@ -137,16 +131,19 @@ class pspnet_backend(AbstractBackend):
         if mask.ndim == 3:
             mask = cv2.cvtColor(mask, cv2.COLOR_RGB2GRAY)
         mask[mask > 0] = 1  # binary mask
-        return tf.convert_to_tensor(img), tf.convert_to_tensor(mask)
+        mask = mask.astype(np.int32)
+        return img, mask
 
     def train_epoch(self, trainer):
         print('train on gluoncv backend')
         batch_size = trainer.config['batch_size']
         summarysteps = trainer.config['summarysteps']
 
-        for i in range(len(trainer.dataloader)):
+        for i , (img, label) in enumerate(trainer.dataloader):
+            x_batch = np.array([img])
+            y_batch = np.array([label])
             trainer.global_step += 1
-            feed_dict = {trainer.step_ph: i}
+            feed_dict = {trainer.step_ph: i, self.x: x_batch, self.y: y_batch}
             loss_value, _ = self.sess.run(
                 [trainer.reduced_loss, trainer.train_op], feed_dict=feed_dict)
             print(loss_value)
@@ -174,7 +171,7 @@ class pspnet_backend(AbstractBackend):
                     trainer.name+"val_predicted", (prediction), global_step=trainer.epoch)
 
     def get_summary_writer(self, logdir='results/'):
-        return SummaryWriter(logdir=logdir)
+        return FileWriter(logdir=logdir)
 
     def predict(self, predictor, img):
         img_batch = batchify.Stack()([img])

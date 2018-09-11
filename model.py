@@ -1,4 +1,4 @@
-from network import Network
+from .network import Network
 import tensorflow as tf
 
 class PSPNet101(Network):

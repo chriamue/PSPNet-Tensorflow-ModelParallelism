@@ -3,7 +3,7 @@ pspnet_shipdetection:
   backend: pspnet_backend
   backbone: pspnet50
   classes: 2
-  gpu: 0
+  gpu: 1
   epochs: 10
   batch_size: 1
   learn_rate: 0.001

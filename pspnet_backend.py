@@ -122,9 +122,12 @@ class pspnet_backend(AbstractBackend):
                 train_op_conv, train_op_fc_w, train_op_fc_b)
 
         self.init = tf.global_variables_initializer()
-        config = tf.ConfigProto(
+        self.config = tf.ConfigProto(
             device_count = {'GPU': config['gpu']}
         )
+        self.config.gpu_options.allow_growth = True
+        self.config.allow_soft_placement=True
+        self.config.gpu_options.allocator_type = 'BFC'
         self.sess = tf.Session(config=self.config)
         self.sess.run(self.init)
         self.saver = tf.train.Saver(
@@ -146,7 +149,7 @@ class pspnet_backend(AbstractBackend):
         return img, mask
 
     def train_epoch(self, trainer):
-        print('train on gluoncv backend')
+        print('train on pspnet backend')
         batch_size = trainer.config['batch_size']
         summarysteps = trainer.config['summarysteps']
 

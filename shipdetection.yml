@@ -1,8 +1,9 @@
-run1_shipdetection:
+pspnet_shipdetection:
   datapath: ~/.kaggle/competitions/airbus-ship-detection/smalldataset
   backend: pspnet_backend
   backbone: pspnet50
   classes: 2
+  gpu: 0
   epochs: 10
   batch_size: 1
   learn_rate: 0.001
@@ -17,7 +18,7 @@ run1_shipdetection:
   flip: True
   zoom_in: 0.5
   zoom_out: 0.5
-  gray_img: True
+  color_img: True
   gray_mask: True
 #  filters:
 #    - 'cv2.Canny': [100,200]

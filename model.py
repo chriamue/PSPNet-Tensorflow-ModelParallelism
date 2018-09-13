@@ -445,16 +445,16 @@ class PSPNet101(Network):
                  .conv(1, 1, num_classes, 1, 1, biased=True, relu=False, name='conv6'))
 
 class PSPNet50(Network):
-    def setup(self, is_training, num_classes):
-        '''Network definition.
+      def setup(self, is_training, num_classes):
+            '''Network definition.
 
-        Args:
-          is_training: whether to update the running mean and variance of the batch normalisation layer.
-                       If the batch size is small, it is better to keep the running mean and variance of
-                       the-pretrained model frozen.
-          num_classes: number of classes to predict (including background).
-        '''
-        with tf.device('/gpu:0'):
+            Args:
+            is_training: whether to update the running mean and variance of the batch normalisation layer.
+                        If the batch size is small, it is better to keep the running mean and variance of
+                        the-pretrained model frozen.
+            num_classes: number of classes to predict (including background).
+            '''
+#            with tf.device('/gpu:0'):
             (self.feed('data')
                  .conv(3, 3, 64, 2, 2, biased=False, relu=False, padding='SAME', name='conv1_1_3x3_s2')
                  .batch_normalization(relu=False, name='conv1_1_3x3_s2_bn')

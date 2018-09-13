@@ -4,15 +4,19 @@ import numpy as np
 import cv2
 import tensorflow as tf
 from .model import PSPNet101, PSPNet50
+from .tools import prepare_label
 
 from protoseg.backends import AbstractBackend
 from protoseg.trainer import Trainer
 
-from tensorflow.summary import FileWriter
+from tensorboardX import SummaryWriter
 
 
 class pspnet_backend(AbstractBackend):
 
+    config = tf.ConfigProto(
+        device_count = {'GPU': 0}
+    )
     saver = None
     sess = None
     step = 0
@@ -21,11 +25,11 @@ class pspnet_backend(AbstractBackend):
 
     def __init__(self):
         AbstractBackend.__init__(self)
-        self.sess = tf.Session()
 
     def load_model(self, config, modelfile):
-        self.x = tf.placeholder(tf.float32, shape=(None, config['width'], config['height'], 3), name='input_x')
-        self.y =  tf.placeholder(tf.int32, shape=(None, config['width'], config['height']), name='output_y')
+        with tf.name_scope("create_inputs"):
+            self.x = tf.placeholder(tf.float32, shape=(None, config['width'], config['height'], 3), name='batch')
+            self.y =  tf.placeholder(tf.uint8, shape=(None, config['width'], config['height'], 1), name='batch')
 
         if config['backbone'] == 'pspnet101':
             model = PSPNet101({'data': self.x}, is_training=True,
@@ -68,7 +72,7 @@ class pspnet_backend(AbstractBackend):
 
         # Predictions: ignoring all predictions with labels greater or equal than n_classes
         raw_prediction = tf.reshape(raw_output, [-1, config['classes']])
-        label_proc = self.y
+        label_proc = prepare_label(self.y, tf.stack(raw_output.get_shape()[1:3]), num_classes=config['classes'], one_hot=False)
         raw_gt = tf.reshape(label_proc, [-1, ])
         indices = tf.squeeze(
             tf.where(tf.less_equal(raw_gt, config['classes'] - 1)), 1)
@@ -88,10 +92,7 @@ class pspnet_backend(AbstractBackend):
         learning_rate = tf.scalar_mul(base_lr, tf.pow(
             (1 - trainer.step_ph / len(trainer.dataloader)), 0.9))
 
-        self.init = tf.global_variables_initializer()
-        self.sess.run(self.init)
-        self.saver = tf.train.Saver(
-            var_list=tf.global_variables(), max_to_keep=2)
+
 
         if True:
             update_ops = None
@@ -120,18 +121,28 @@ class pspnet_backend(AbstractBackend):
             trainer.train_op = tf.group(
                 train_op_conv, train_op_fc_w, train_op_fc_b)
 
+        self.init = tf.global_variables_initializer()
+        config = tf.ConfigProto(
+            device_count = {'GPU': config['gpu']}
+        )
+        self.sess = tf.Session(config=self.config)
+        self.sess.run(self.init)
+        self.saver = tf.train.Saver(
+            var_list=tf.global_variables(), max_to_keep=2)
+
     def dataloader_format(self, img, mask=None):
         if img.ndim == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
         img = img.astype(np.float32)
-        #img = np.rollaxis(img, axis=2, start=0)
+        img = img/255.0
         if mask is None:
             return tf.convert_to_tensor(img)
 
         if mask.ndim == 3:
             mask = cv2.cvtColor(mask, cv2.COLOR_RGB2GRAY)
         mask[mask > 0] = 1  # binary mask
-        mask = mask.astype(np.int32)
+        mask = np.expand_dims(mask, axis=2)
+        mask = mask.astype(np.uint8)
         return img, mask
 
     def train_epoch(self, trainer):
@@ -139,20 +150,20 @@ class pspnet_backend(AbstractBackend):
         batch_size = trainer.config['batch_size']
         summarysteps = trainer.config['summarysteps']
 
-        for i , (img, label) in enumerate(trainer.dataloader):
-            x_batch = np.array([img])
-            y_batch = np.array([label])
+        for i , (img_batch, label_batch) in enumerate(trainer.dataloader.batch_generator(batch_size)):
+            x_batch = np.array(img_batch)
+            y_batch = np.array(label_batch)
             trainer.global_step += 1
-            feed_dict = {trainer.step_ph: i, self.x: x_batch, self.y: y_batch}
+            feed_dict = {trainer.step_ph: trainer.global_step, self.x: x_batch, self.y: y_batch}
             loss_value, _ = self.sess.run(
                 [trainer.reduced_loss, trainer.train_op], feed_dict=feed_dict)
-            print(loss_value)
+            trainer.loss += loss_value
             if i % summarysteps == 0:
                 print(trainer.global_step, i, 'loss:', trainer.loss / (i+1))
                 if trainer.summarywriter:
 
                     trainer.summarywriter.add_scalar(
-                        tag=trainer.name+'loss', value=loss_value, global_step=trainer.global_step)
+                        trainer.name+'loss', loss_value, global_step=trainer.global_step)
 
     def validate_epoch(self, trainer):
         batch_size = trainer.config['batch_size']
@@ -171,7 +182,7 @@ class pspnet_backend(AbstractBackend):
                     trainer.name+"val_predicted", (prediction), global_step=trainer.epoch)
 
     def get_summary_writer(self, logdir='results/'):
-        return FileWriter(logdir=logdir)
+        return SummaryWriter(log_dir=logdir)
 
     def predict(self, predictor, img):
         img_batch = batchify.Stack()([img])

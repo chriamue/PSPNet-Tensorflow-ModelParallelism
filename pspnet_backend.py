@@ -2,6 +2,7 @@ from __future__ import absolute_import
 import os
 import numpy as np
 import cv2
+from tqdm import tqdm
 import tensorflow as tf
 from .model import PSPNet101, PSPNet50
 from .tools import prepare_label, decode_labels
@@ -39,9 +40,9 @@ class pspnet_backend(AbstractBackend):
         else:
             model = PSPNet50({'data': self.x}, is_training=True,
                              num_classes=config['classes'])
-        if os.path.isfile(modelfile):
-            print('loaded model from:', modelfile)
-            self.saver.restore(self.sess, modelfile)
+        #if os.path.isfile(modelfile):
+        #    print('loaded model from:', modelfile)
+        
         return model
 
     def save_model(self, model):
@@ -142,6 +143,16 @@ class pspnet_backend(AbstractBackend):
         self.sess.run(self.init)
         self.saver = tf.train.Saver(
             var_list=tf.global_variables(), max_to_keep=2)
+        modelpath = os.path.dirname(trainer.model.modelfile)
+        ckpt = tf.train.get_checkpoint_state(modelpath)
+        if ckpt and ckpt.model_checkpoint_path:
+            loader = tf.train.Saver(var_list=restore_var)
+            load_step = int(os.path.basename(ckpt.model_checkpoint_path).split('-')[1])
+            loader.restore(self.sess, ckpt.model_checkpoint_path)
+            print("Restored model parameters from {}".format(ckpt.model_checkpoint_path))
+        else:
+            print('No checkpoint file found.')
+            load_step = 0
 
     def dataloader_format(self, img, mask=None):
         if img.ndim == 2:
@@ -164,11 +175,10 @@ class pspnet_backend(AbstractBackend):
         batch_size = trainer.config['batch_size']
         summarysteps = trainer.config['summarysteps']
 
-        for i, (img_batch, label_batch) in enumerate(trainer.dataloader.batch_generator(batch_size)):
+        for i, (img_batch, label_batch) in tqdm(enumerate(trainer.dataloader.batch_generator(batch_size))):
             x_batch = np.array(img_batch)
             y_batch = np.array(label_batch)
-            trainer.global_step += 1
-            feed_dict = {trainer.step_ph: trainer.global_step,
+            feed_dict = {trainer.step_ph: i,
                          self.x: x_batch, self.y: y_batch}
             loss_value, _ = self.sess.run(
                 [trainer.reduced_loss, trainer.train_op], feed_dict=feed_dict)
@@ -182,10 +192,11 @@ class pspnet_backend(AbstractBackend):
                     trainer.summarywriter.add_image(
                         trainer.name+'image', img, global_step=trainer.global_step)
                     trainer.summarywriter.add_image(
-                        trainer.name+'mask', np.squeeze(y_batch[0], axis=2), global_step=trainer.global_step)
+                        trainer.name+'mask', np.squeeze(y_batch[0], axis=2).astype(np.float32), global_step=trainer.global_step)
                     pred = self.predict(None, x_batch[0])
                     trainer.summarywriter.add_image(
-                        trainer.name+'predicted', np.squeeze(pred, axis=2), global_step=trainer.global_step)
+                        trainer.name+'predicted', np.squeeze(pred, axis=2).astype(np.float32), global_step=trainer.global_step)
+            trainer.global_step += 1
                     
 
     def validate_epoch(self, trainer):
@@ -201,9 +212,9 @@ class pspnet_backend(AbstractBackend):
                 trainer.summarywriter.add_image(
                     trainer.name+"val_image", img, global_step=trainer.epoch)
                 trainer.summarywriter.add_image(
-                    trainer.name+"val_mask", np.squeeze(y_batch[0], axis=2), global_step=trainer.epoch)
+                    trainer.name+"val_mask", np.squeeze(y_batch[0], axis=2).astype(np.float32), global_step=trainer.epoch)
                 trainer.summarywriter.add_image(
-                    trainer.name+"val_predicted", np.squeeze(prediction[0], axis=2), global_step=trainer.epoch)
+                    trainer.name+"val_predicted", np.squeeze(prediction[0], axis=2).astype(np.float32), global_step=trainer.epoch)
 
     def get_summary_writer(self, logdir='results/'):
         return SummaryWriter(log_dir=logdir)
@@ -215,4 +226,4 @@ class pspnet_backend(AbstractBackend):
     def batch_predict(self, predictor, img_batch):
         feed_dict = {self.x: img_batch}
         preds = self.sess.run(self.pred, feed_dict=feed_dict)
-        return preds.astype(np.float32)
+        return preds
